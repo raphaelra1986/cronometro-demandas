@@ -11,6 +11,11 @@ from logger import log_error, log_info
 
 # Detectar ambiente
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# Render usa postgres:// mas psycopg2 precisa de postgresql://
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 IS_POSTGRES = DATABASE_URL is not None
 
 if IS_POSTGRES:
