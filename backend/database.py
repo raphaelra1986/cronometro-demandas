@@ -72,36 +72,39 @@ class DatabaseManager:
         conn = self._connect()
         cur = self._get_cursor(conn)
 
-        if self.is_postgres:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS demands (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    card TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    accumulated_time REAL DEFAULT 0.0,
-                    start_time TEXT,
-                    end_time TEXT,
-                    description TEXT,
-                    category TEXT DEFAULT 'Extra'
-                )
-            """)
-        else:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS demands (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    card TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    accumulated_time REAL DEFAULT 0.0,
-                    start_time TEXT,
-                    end_time TEXT,
-                    description TEXT,
-                    category TEXT DEFAULT 'Extra'
-                )
-            """)
-
-        conn.commit()
+        try:
+            if self.is_postgres:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS demands (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        card TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        accumulated_time DOUBLE PRECISION DEFAULT 0.0,
+                        start_time TEXT,
+                        end_time TEXT,
+                        description TEXT,
+                        category TEXT DEFAULT 'Extra'
+                    )
+                """)
+            else:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS demands (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        card TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        accumulated_time REAL DEFAULT 0.0,
+                        start_time TEXT,
+                        end_time TEXT,
+                        description TEXT,
+                        category TEXT DEFAULT 'Extra'
+                    )
+                """)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log_info(f"Tabela já existe ou erro ignorado: {e}")
 
         # Migration: add category column if not exists
         try:
@@ -113,12 +116,11 @@ class DatabaseManager:
         except Exception:
             conn.rollback()
 
-        # Criar índices
-        self._create_indexes(cur)
-        conn.commit()
+        # Criar índices (ignorar erros se já existem)
+        self._create_indexes(cur, conn)
         conn.close()
 
-    def _create_indexes(self, cur) -> None:
+    def _create_indexes(self, cur, conn) -> None:
         """Cria índices para melhorar performance de queries."""
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_demands_status ON demands(status)",
@@ -128,8 +130,10 @@ class DatabaseManager:
         for idx_sql in indexes:
             try:
                 cur.execute(idx_sql)
+                conn.commit()
             except Exception as e:
-                log_error(f"Erro ao criar índice: {e}")
+                conn.rollback()
+                log_info(f"Índice já existe ou erro ignorado: {e}")
 
     def _row_to_dict(self, row) -> Optional[Dict]:
         """Converte uma row para dicionário."""
