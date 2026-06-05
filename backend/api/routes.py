@@ -2,12 +2,19 @@
 """Rotas REST da API."""
 
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List
 from datetime import datetime, timedelta
 
 from controller import Controller
 from model import Status, Categories, Demand
+from integrations.teams import (
+    notify_demand_started,
+    notify_demand_paused,
+    notify_demand_finished,
+    notify_demand_deleted,
+    is_teams_enabled
+)
 from .schemas import (
     DemandCreate,
     DemandResponse,
@@ -72,21 +79,28 @@ async def get_demand(demand_id: int):
 
 
 @router.delete("/demands/{demand_id}", response_model=MessageResponse)
-async def delete_demand(demand_id: int):
+async def delete_demand(demand_id: int, background_tasks: BackgroundTasks):
     """Remove uma demanda."""
     demand = controller.get_demand_by_id(demand_id)
     if not demand:
         raise HTTPException(status_code=404, detail="Demanda não encontrada")
 
+    # Guardar dados antes de deletar
+    name = demand.name
+    card = demand.card
+
     success = controller.delete_demand(demand_id)
     if not success:
         raise HTTPException(status_code=500, detail="Erro ao remover demanda")
+
+    # Notificar Teams em background
+    background_tasks.add_task(notify_demand_deleted, name, card)
 
     return MessageResponse(message="Demanda removida com sucesso")
 
 
 @router.post("/demands/{demand_id}/start", response_model=DemandResponse)
-async def start_demand(demand_id: int):
+async def start_demand(demand_id: int, background_tasks: BackgroundTasks):
     """Inicia o cronômetro de uma demanda."""
     demand = controller.get_demand_by_id(demand_id)
     if not demand:
@@ -96,11 +110,20 @@ async def start_demand(demand_id: int):
     if not success:
         raise HTTPException(status_code=400, detail="Não foi possível iniciar a demanda")
 
-    return demand_to_response(controller.get_demand_by_id(demand_id))
+    # Notificar Teams em background
+    updated = controller.get_demand_by_id(demand_id)
+    background_tasks.add_task(
+        notify_demand_started,
+        updated.name,
+        updated.card,
+        getattr(updated, 'category', 'Extra')
+    )
+
+    return demand_to_response(updated)
 
 
 @router.post("/demands/{demand_id}/pause", response_model=DemandResponse)
-async def pause_demand(demand_id: int):
+async def pause_demand(demand_id: int, background_tasks: BackgroundTasks):
     """Pausa o cronômetro de uma demanda."""
     demand = controller.get_demand_by_id(demand_id)
     if not demand:
@@ -110,11 +133,20 @@ async def pause_demand(demand_id: int):
     if not success:
         raise HTTPException(status_code=400, detail="Não foi possível pausar a demanda")
 
-    return demand_to_response(controller.get_demand_by_id(demand_id))
+    # Notificar Teams em background
+    updated = controller.get_demand_by_id(demand_id)
+    background_tasks.add_task(
+        notify_demand_paused,
+        updated.name,
+        updated.card,
+        Demand.format_time(updated.accumulated_time)
+    )
+
+    return demand_to_response(updated)
 
 
 @router.post("/demands/{demand_id}/stop", response_model=DemandResponse)
-async def stop_demand(demand_id: int, data: StopDemandRequest):
+async def stop_demand(demand_id: int, data: StopDemandRequest, background_tasks: BackgroundTasks):
     """Finaliza uma demanda."""
     demand = controller.get_demand_by_id(demand_id)
     if not demand:
@@ -124,7 +156,18 @@ async def stop_demand(demand_id: int, data: StopDemandRequest):
     if not success:
         raise HTTPException(status_code=400, detail="Não foi possível finalizar a demanda")
 
-    return demand_to_response(controller.get_demand_by_id(demand_id))
+    # Notificar Teams em background
+    updated = controller.get_demand_by_id(demand_id)
+    background_tasks.add_task(
+        notify_demand_finished,
+        updated.name,
+        updated.card,
+        getattr(updated, 'category', 'Extra'),
+        Demand.format_time(updated.accumulated_time),
+        data.description
+    )
+
+    return demand_to_response(updated)
 
 
 @router.patch("/demands/{demand_id}/time", response_model=DemandResponse)
